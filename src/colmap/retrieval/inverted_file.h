@@ -173,7 +173,7 @@ bool InvertedFile<kEmbeddingDim>::EntriesSorted() const {
 
 template <int kEmbeddingDim>
 bool InvertedFile<kEmbeddingDim>::IsUsable() const {
-  return status_ & kUsable;
+  return (status_ & kUsable) == kUsable;
 }
 
 template <int kEmbeddingDim>
@@ -228,7 +228,7 @@ void InvertedFile<kEmbeddingDim>::ConvertToBinaryDescriptor(
 
 template <int kEmbeddingDim>
 void InvertedFile<kEmbeddingDim>::ComputeIDFWeight(const int num_total_images) {
-  if (entries_.empty()) {
+  if (!HasHammingEmbedding() || entries_.empty()) {
     squared_idf_weight_ = 0.0f;
     return;
   }

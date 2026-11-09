@@ -87,8 +87,8 @@ class InvertedIndex {
   void GetImageIds(FlatHashSet<int>* image_ids) const;
 
   // Read/write the inverted index from/to a binary file.
-  void Read(std::istream* in);
-  void Write(std::ostream* out) const;
+  void Read(std::istream* in, FlatHashSet<int>* image_ids);
+  void Write(std::ostream* out, const FlatHashSet<int>& image_ids) const;
 
  private:
   void ComputeWeightsAndNormalizationConstants();
@@ -325,7 +325,8 @@ void InvertedIndex<kDescType, kDescDim, kEmbeddingDim>::GetImageIds(
 }
 
 template <typename kDescType, int kDescDim, int kEmbeddingDim>
-void InvertedIndex<kDescType, kDescDim, kEmbeddingDim>::Read(std::istream* in) {
+void InvertedIndex<kDescType, kDescDim, kEmbeddingDim>::Read(
+    std::istream* in, FlatHashSet<int>* image_ids) {
   THROW_CHECK(in->good());
 
   const int32_t num_words = ReadBinaryLittleEndian<int>(in);
@@ -353,17 +354,22 @@ void InvertedIndex<kDescType, kDescDim, kEmbeddingDim>::Read(std::istream* in) {
 
   normalization_constants_.clear();
   normalization_constants_.reserve(num_images);
+  // Older files may contain postings but no prepared normalization table.
+  image_ids->clear();
+  GetImageIds(image_ids);
   for (int32_t i = 0; i < num_images; ++i) {
     const int image_id = ReadBinaryLittleEndian<int>(in);
     float value;
-    in->read(reinterpret_cast<char*>(&value), sizeof(float));
+    THROW_CHECK(in->read(reinterpret_cast<char*>(&value), sizeof(value)))
+        << "Incomplete visual index image normalization record";
     normalization_constants_[image_id] = value;
+    image_ids->insert(image_id);
   }
 }
 
 template <typename kDescType, int kDescDim, int kEmbeddingDim>
 void InvertedIndex<kDescType, kDescDim, kEmbeddingDim>::Write(
-    std::ostream* out) const {
+    std::ostream* out, const FlatHashSet<int>& image_ids) const {
   THROW_CHECK(out->good());
 
   const int num_words = static_cast<int32_t>(NumVisualWords());
@@ -384,12 +390,15 @@ void InvertedIndex<kDescType, kDescDim, kEmbeddingDim>::Write(
     inverted_file.Write(out);
   }
 
-  const int32_t num_images = normalization_constants_.size();
+  const int32_t num_images = image_ids.size();
   WriteBinaryLittleEndian<int>(out, num_images);
 
-  for (const auto& constant : normalization_constants_) {
-    WriteBinaryLittleEndian<int>(out, constant.first);
-    out->write(reinterpret_cast<const char*>(&constant.second), sizeof(float));
+  for (const int image_id : image_ids) {
+    WriteBinaryLittleEndian<int>(out, image_id);
+    const auto it = normalization_constants_.find(image_id);
+    const float weight =
+        it == normalization_constants_.end() ? 0.0f : it->second;
+    out->write(reinterpret_cast<const char*>(&weight), sizeof(weight));
   }
 }
 

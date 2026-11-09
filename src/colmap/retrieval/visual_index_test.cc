@@ -4,11 +4,17 @@
 
 #include "colmap/feature/types.h"
 #include "colmap/math/random_eigen.h"
+#include "colmap/retrieval/inverted_index.h"
 #include "colmap/util/file.h"
 #include "colmap/util/testing.h"
 
+#include <fstream>
 #include <sstream>
 
+#include <faiss/IndexFlat.h>
+#include <faiss/IndexIVFFlat.h>
+#include <faiss/impl/io.h>
+#include <faiss/index_io.h>
 #include <gtest/gtest.h>
 
 namespace colmap {
@@ -21,6 +27,185 @@ FeatureDescriptorsFloat CreateRandomDescriptors(int num_rows,
                                                 FeatureExtractorType type) {
   return FeatureDescriptorsFloat(
       type, FeatureDescriptorsFloatData::Random(num_rows, desc_dim));
+}
+
+VisualIndex::BuildOptions SmallVocabularyOptions() {
+  VisualIndex::BuildOptions options;
+  options.num_visual_words = 4;
+  options.num_iterations = 2;
+  options.num_rounds = 1;
+  options.num_threads = 1;
+  return options;
+}
+
+TEST(VisualIndexLifecycle, RebuildDropsPreviouslyIndexedImages) {
+  auto index = VisualIndex::Create(32, 16);
+  const auto train =
+      CreateRandomDescriptors(200, 32, FeatureExtractorType::SIFT);
+  index->Build(SmallVocabularyOptions(), train);
+  index->Add({}, 7, FeatureKeypoints(train.data.rows()), train);
+  index->Prepare();
+  index->Build(SmallVocabularyOptions(), train);
+  EXPECT_EQ(index->NumImages(), 0);
+  EXPECT_FALSE(index->IsImageIndexed(7));
+  std::vector<ImageScore> scores;
+  EXPECT_ANY_THROW(index->Query({}, train, &scores));
+  index->Add({}, 7, FeatureKeypoints(train.data.rows()), train);
+  index->Prepare();
+  index->Query({}, train, &scores);
+  ASSERT_EQ(scores.size(), 1);
+  EXPECT_EQ(scores.front().image_id, 7);
+}
+
+TEST(VisualIndexLifecycle, FailedWordAssignmentCanBeRetried) {
+  auto index = VisualIndex::Create(32, 16);
+  const auto train =
+      CreateRandomDescriptors(200, 32, FeatureExtractorType::SIFT);
+  index->Build(SmallVocabularyOptions(), train);
+  index->Prepare();
+  VisualIndex::IndexOptions invalid;
+  invalid.num_neighbors = 0;
+  const FeatureKeypoints keypoints(train.data.rows());
+  EXPECT_ANY_THROW(index->Add(invalid, 7, keypoints, train));
+  EXPECT_FALSE(index->IsImageIndexed(7));
+  std::vector<ImageScore> scores;
+  EXPECT_NO_THROW(index->Query({}, train, &scores));
+  index->Add({}, 7, keypoints, train);
+  index->Prepare();
+  index->Query({}, train, &scores);
+  ASSERT_EQ(scores.size(), 1);
+}
+
+TEST(VisualIndexLifecycle, FeaturelessImageMembershipSurvivesSerialization) {
+  const auto directory = CreateTestDir();
+  auto index = VisualIndex::Create(32, 16);
+  const auto train =
+      CreateRandomDescriptors(200, 32, FeatureExtractorType::SIFT);
+  index->Build(SmallVocabularyOptions(), train);
+  index->Add(
+      {}, 5, {}, CreateRandomDescriptors(0, 32, FeatureExtractorType::SIFT));
+  index->Add({}, 7, FeatureKeypoints(train.data.rows()), train);
+  for (const bool prepared : {false, true}) {
+    if (prepared) {
+      index->Prepare();
+    }
+    const auto path = directory / "index.bin";
+    index->Write(path);
+    auto restored = VisualIndex::Read(path);
+    EXPECT_EQ(restored->NumImages(), 2);
+    EXPECT_TRUE(restored->IsImageIndexed(5));
+    EXPECT_TRUE(restored->IsImageIndexed(7));
+  }
+}
+
+TEST(VisualIndexLifecycle, RejectIncompleteStoredImageWeight) {
+  const auto path = CreateTestDir() / "index.bin";
+  auto index = VisualIndex::Create(32, 16);
+  const auto train =
+      CreateRandomDescriptors(200, 32, FeatureExtractorType::SIFT);
+  index->Build(SmallVocabularyOptions(), train);
+  index->Add({}, 7, FeatureKeypoints(train.data.rows()), train);
+  index->Prepare();
+  index->Write(path);
+  std::filesystem::resize_file(path, std::filesystem::file_size(path) - 1);
+  EXPECT_ANY_THROW(VisualIndex::Read(path));
+}
+
+TEST(VisualIndexWeights, SkipUntrainedWordsInAppearanceScores) {
+  using Index = InvertedIndex<float, 32, 16>;
+  Index index;
+  index.Initialize(2);
+  const Index::DescType training = Index::DescType::Ones(8, 32);
+  index.ComputeHammingEmbedding(training, Index::WordIds::Zero(8, 1));
+  const Index::DescType descriptor = training.topRows(1);
+  index.AddEntry(1, 0, 0, descriptor, {});
+  index.AddEntry(2, 1, 0, descriptor, {});
+  index.Finalize();
+  std::vector<ImageScore> scores;
+  Index::WordIds query_word(1, 1);
+  query_word(0) = 1;
+  index.Query(descriptor, query_word, &scores);
+  EXPECT_TRUE(scores.empty());
+  EXPECT_FLOAT_EQ(index.SquaredIDFWeight(1), 0);
+  EXPECT_FLOAT_EQ(index.ComputeSelfSimilarity(query_word), 0);
+  query_word(0) = 0;
+  index.Query(descriptor, query_word, &scores);
+  ASSERT_EQ(scores.size(), 1);
+  EXPECT_EQ(scores.front().image_id, 1);
+}
+
+TEST(VisualIndexWeights, MultipleAssignmentsKeepTheStrongestCorrespondence) {
+  // Word 0 occurs in both images and has no discriminative weight. Word 1
+  // occurs only in the target image and separates the six descriptor codes.
+  using Index = InvertedIndex<float, 32, 16>;
+  Index postings;
+  postings.Initialize(2);
+  Index::DescType training = Index::DescType::Zero(10, 32);
+  training.topRows(5).setConstant(10);
+  Index::WordIds labels = Index::WordIds::Ones(10, 1);
+  labels.topRows(5).setZero();
+  postings.ComputeHammingEmbedding(training, labels);
+
+  constexpr int kFeatures = 6;
+  FeatureDescriptorsFloat query(FeatureExtractorType::SIFT,
+                                Index::DescType::Zero(kFeatures, 32));
+  FeatureKeypoints keypoints;
+  for (int i = 0; i < kFeatures; ++i) {
+    for (int j = 0; j < 16; ++j) {
+      query.data(i, j) = std::bitset<4>(i & j).count() % 2 ? 1 : -1;
+    }
+    FeatureGeometry g;
+    g.x = 80 * i;
+    g.y = 70 * ((i * i + 1) % 7);
+    g.scale = 1;
+    keypoints.emplace_back(g.x, g.y, 1, 0);
+  }
+  for (int i = kFeatures - 1; i >= 0; --i) {
+    FeatureGeometry g;
+    g.x = keypoints[i].x;
+    g.y = keypoints[i].y;
+    g.scale = 1;
+    for (const int word : {0, 1}) {
+      postings.AddEntry(7, word, kFeatures - 1 - i, query.data.row(i), g);
+    }
+  }
+  postings.AddEntry(9, 0, 0, query.data.row(0), {});
+  postings.Finalize();
+
+  // The query's nearest word is always 0. Search both words so every true
+  // correspondence is encountered first with zero weight.
+  faiss::IndexFlatL2 quantizer(32);
+  faiss::IndexIVFFlat vocabulary(&quantizer, 32, 1);
+  Index::DescType centers = Index::DescType::Zero(2, 32);
+  centers.row(1).setConstant(5);
+  vocabulary.train(2, centers.data());
+  vocabulary.add(2, centers.data());
+  const auto path = CreateTestDir() / "words.bin";
+  faiss::VectorIOWriter encoded;
+  faiss::write_index(&vocabulary, &encoded);
+  {
+    std::ofstream file(path, std::ios::binary);
+    // VisualIndex version 2, descriptor width, embedding width, extractor.
+    const int header[] = {
+        2, 32, 16, static_cast<int>(FeatureExtractorType::SIFT)};
+    file.write(reinterpret_cast<const char*>(header), sizeof(header));
+    file.write(reinterpret_cast<const char*>(encoded.data.data()),
+               encoded.data.size());
+    postings.Write(&file, {7, 9});
+  }
+  auto index = VisualIndex::Read(path);
+  index->Prepare();
+  VisualIndex::QueryOptions opts;
+  opts.num_neighbors = 2;
+  opts.image_id_filter = [](int image_id) { return image_id == 7; };
+  std::vector<ImageScore> scores;
+  index->Query(opts, query, &scores);
+  ASSERT_EQ(scores.size(), 1);
+  const float before_verification = scores.front().score;
+  opts.num_images_after_verification = 1;
+  index->Query(opts, keypoints, query, &scores);
+  ASSERT_EQ(scores.size(), 1);
+  EXPECT_NEAR(scores.front().score - before_verification, kFeatures, 1e-5);
 }
 
 class ParameterizedVisualIndexTests

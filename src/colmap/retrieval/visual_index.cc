@@ -101,11 +101,10 @@ class FaissVisualIndex : public VisualIndex {
       return;
     }
 
-    image_ids_.insert(image_id);
-
-    prepared_ = false;
-
+    THROW_CHECK_GE(image_id, 0);
     if (descriptors.data.rows() == 0) {
+      image_ids_.insert(image_id);
+      prepared_ = false;
       return;
     }
 
@@ -130,6 +129,8 @@ class FaissVisualIndex : public VisualIndex {
         }
       }
     }
+    image_ids_.insert(image_id);
+    prepared_ = false;
   }
 
   bool IsImageIndexed(int image_id) const override {
@@ -202,8 +203,8 @@ class FaissVisualIndex : public VisualIndex {
       query_entry.geometry.orientation = keypoints[i].ComputeOrientation();
       query_entries.push_back(query_entry);
 
-      // For each db feature, keep track of the lowest distance (if db features
-      // are mapped to more than one visual word).
+      // Keep the strongest weighted match for each database feature across
+      // its assigned visual words.
       NodeHashMap<int, NodeHashMap<int, std::pair<float, const EntryType*>>>
           image_matches;
 
@@ -233,7 +234,7 @@ class FaissVisualIndex : public VisualIndex {
                   feature_matches.find(match->feature_idx);
 
               if (feature_match == feature_matches.end() ||
-                  feature_match->first < dist) {
+                  feature_match->second.first < dist) {
                 feature_matches[match->feature_idx] =
                     std::make_pair(dist, match);
               }
@@ -419,7 +420,9 @@ class FaissVisualIndex : public VisualIndex {
 
     index_ = BuildFaissIndex(options, visual_words);
 
-    // Initialize a new inverted index.
+    // A new vocabulary has no images or finalized database weights.
+    image_ids_.clear();
+    prepared_ = false;
     inverted_index_ = InvertedIndexType();
     inverted_index_.Initialize(index_->ntotal);
     VLOG(2) << "Initialized inverted index";
@@ -460,9 +463,7 @@ class FaissVisualIndex : public VisualIndex {
     std::ifstream file(path, std::ios::binary);
     THROW_CHECK_FILE_OPEN(file, path);
     file.seekg(offset, std::ios::beg);
-    inverted_index_.Read(&file);
-    image_ids_.clear();
-    inverted_index_.GetImageIds(&image_ids_);
+    inverted_index_.Read(&file, &image_ids_);
   }
 
   void Write(const std::filesystem::path& path) const override {
@@ -502,7 +503,7 @@ class FaissVisualIndex : public VisualIndex {
     {
       std::ofstream file(path, std::ios::binary | std::ios::app);
       THROW_CHECK_FILE_OPEN(file, path);
-      inverted_index_.Write(&file);
+      inverted_index_.Write(&file, image_ids_);
     }
   }
 
