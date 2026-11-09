@@ -8,7 +8,10 @@
 #include "colmap/util/hash_containers.h"
 #include "colmap/util/logging.h"
 
+#include <array>
+
 #include <Eigen/Geometry>
+#include <boost/container_hash/hash.hpp>
 
 namespace colmap {
 namespace retrieval {
@@ -44,8 +47,6 @@ struct TwoWayTransform {
 // transformation. Keeps track of the mean transformation described by the bin.
 class VotingBin {
  public:
-  void SetCoord(const Eigen::Vector4i& coord) { coord_ = coord; }
-
   void Vote(const FeatureGeometryTransform& tform) {
     num_votes_ += 1;
     sum_tform_.scale += tform.scale;
@@ -53,8 +54,6 @@ class VotingBin {
     sum_tform_.tx += tform.tx;
     sum_tform_.ty += tform.ty;
   }
-
-  inline const Eigen::Vector4i& GetCoord() const { return coord_; }
 
   inline int GetNumVotes() const { return num_votes_; }
 
@@ -70,7 +69,6 @@ class VotingBin {
   }
 
  private:
-  Eigen::Vector4i coord_;
   int num_votes_ = 0;
   FeatureGeometryTransform sum_tform_;
 };
@@ -148,8 +146,8 @@ size_t ComputeEffectiveInlierCount(
 
   float min_x = std::numeric_limits<float>::max();
   float min_y = std::numeric_limits<float>::max();
-  float max_x = 0;
-  float max_y = 0;
+  float max_x = std::numeric_limits<float>::lowest();
+  float max_y = std::numeric_limits<float>::lowest();
 
   for (const auto& match : matches) {
     if (ComputeScaleError(match.geometry1, match.geometry2, tform) <=
@@ -168,18 +166,22 @@ size_t ComputeEffectiveInlierCount(
     return 0;
   }
 
-  const float scale_x = num_bins / (max_x - min_x);
-  const float scale_y = num_bins / (max_y - min_y);
+  const auto bin_index = [num_bins](float value, float lower, float upper) {
+    if (lower == upper) {
+      return 0;
+    }
+    const double fraction = (static_cast<double>(value) - lower) /
+                            (static_cast<double>(upper) - lower);
+    return std::min(static_cast<int>(fraction * num_bins), num_bins - 1);
+  };
 
   Eigen::Matrix<int, Eigen::Dynamic, Eigen::Dynamic> counter(num_bins,
                                                              num_bins);
   counter.setZero();
 
   for (const auto& coord : inlier_coords) {
-    const int c_x = (coord.first - min_x) * scale_x;
-    const int c_y = (coord.second - min_y) * scale_y;
-    counter(std::clamp(c_x, 0, num_bins - 1),
-            std::clamp(c_y, 0, num_bins - 1)) = 1;
+    counter(bin_index(coord.first, min_x, max_x),
+            bin_index(coord.second, min_y, max_y)) = 1;
   }
 
   return counter.sum();
@@ -220,13 +222,15 @@ int VoteAndVerify(const VoteAndVerifyOptions& options,
   // Fill the multi-resolution voting histogram.
   //////////////////////////////////////////////////////////////////////////////
 
-  std::vector<NodeHashMap<size_t, VotingBin>> bins(options.num_levels);
+  using BinCoord = std::array<int, 4>;
+  std::vector<NodeHashMap<BinCoord, VotingBin, boost::hash<BinCoord>>> bins(
+      options.num_levels);
   for (auto& levelBins : bins) {
     levelBins.reserve(num_matches);
   }
 
   for (const auto& match : matches) {
-    const auto T =
+    auto T =
         FeatureGeometry::TransformFromMatch(match.geometry1, match.geometry2);
 
     if (std::abs(T.tx) > max_trans || std::abs(T.ty) > max_trans) {
@@ -241,33 +245,29 @@ int VoteAndVerify(const VoteAndVerifyOptions& options,
     const float x = (T.tx + max_trans) * trans_norm;
     const float y = (T.ty + max_trans) * trans_norm;
     const float s = (log_scale + max_log_scale) * scale_norm;
+    // Store and average equivalent rotations on the same angular branch.
+    constexpr float kPi = static_cast<float>(EIGEN_PI);
+    T.angle = std::remainder(T.angle, 2 * kPi);
+    if (T.angle == kPi) {
+      T.angle = -kPi;
+    }
     const float a = (T.angle + static_cast<float>(EIGEN_PI)) * angle_norm;
 
-    int n_x = std::min(static_cast<int>(x * options.num_trans_bins),
-                       static_cast<int>(options.num_trans_bins - 1));
-    int n_y = std::min(static_cast<int>(y * options.num_trans_bins),
-                       static_cast<int>(options.num_trans_bins - 1));
-    int n_s = std::min(static_cast<int>(s * options.num_scale_bins),
-                       static_cast<int>(options.num_scale_bins - 1));
-    int n_a = std::min(static_cast<int>(a * options.num_angle_bins),
-                       static_cast<int>(options.num_angle_bins - 1));
+    const int n_x = std::min(static_cast<int>(x * options.num_trans_bins),
+                             static_cast<int>(options.num_trans_bins - 1));
+    const int n_y = std::min(static_cast<int>(y * options.num_trans_bins),
+                             static_cast<int>(options.num_trans_bins - 1));
+    const int n_s = std::min(static_cast<int>(s * options.num_scale_bins),
+                             static_cast<int>(options.num_scale_bins - 1));
+    const int n_a = std::min(static_cast<int>(a * options.num_angle_bins),
+                             static_cast<int>(options.num_angle_bins - 1));
 
+    BinCoord coord{n_a, n_s, n_x, n_y};
     for (int level = 0; level < options.num_levels; ++level) {
-      const size_t index =
-          n_a + options.num_angle_bins *
-                    (n_s + options.num_scale_bins *
-                               (n_x + options.num_trans_bins * n_y));
-
-      if (level == 0) {
-        bins[level][index].SetCoord(Eigen::Vector4i(n_a, n_s, n_x, n_y));
+      bins[level][coord].Vote(T);
+      for (int& component : coord) {
+        component >>= 1;
       }
-
-      bins[level][index].Vote(T);
-
-      n_x >>= 1;
-      n_y >>= 1;
-      n_s >>= 1;
-      n_a >>= 1;
     }
   }
 
@@ -275,30 +275,21 @@ int VoteAndVerify(const VoteAndVerifyOptions& options,
   // Compute the multi-resolution scores for all occupied bins.
   //////////////////////////////////////////////////////////////////////////////
 
-  std::vector<std::pair<int, float>> bin_scores;
+  std::vector<std::pair<const VotingBin*, float>> bin_scores;
   bin_scores.reserve(bins[0].size());
   for (const auto& bin : bins[0]) {
     if (bin.second.GetNumVotes() >= options.min_num_votes) {
-      const Eigen::Vector4i& coord = bin.second.GetCoord();
-      int n_a = coord(0);
-      int n_s = coord(1);
-      int n_x = coord(2);
-      int n_y = coord(3);
+      BinCoord coord = bin.first;
       float score = bin.second.GetNumVotes();
       float level_weight = 0.5f;
       for (int level = 1; level < options.num_levels; ++level) {
-        n_x >>= 1;
-        n_y >>= 1;
-        n_s >>= 1;
-        n_a >>= 1;
-        const uint64_t index =
-            n_a + options.num_angle_bins *
-                      (n_s + options.num_scale_bins *
-                                 (n_x + options.num_trans_bins * n_y));
-        score += bins[level][index].GetNumVotes() * level_weight;
+        for (int& component : coord) {
+          component >>= 1;
+        }
+        score += bins[level].at(coord).GetNumVotes() * level_weight;
         level_weight *= 0.5f;
       }
-      bin_scores.emplace_back(bin.first, score);
+      bin_scores.emplace_back(&bin.second, score);
     }
   }
 
@@ -312,8 +303,7 @@ int VoteAndVerify(const VoteAndVerifyOptions& options,
   std::partial_sort(bin_scores.begin(),
                     bin_scores.begin() + num_transformations,
                     bin_scores.end(),
-                    [](const std::pair<int, float>& score1,
-                       const std::pair<int, float>& score2) {
+                    [](const auto& score1, const auto& score2) {
                       return score1.second > score2.second;
                     });
 
@@ -327,7 +317,7 @@ int VoteAndVerify(const VoteAndVerifyOptions& options,
   size_t best_num_inliers = 0;
   std::vector<int> best_inlier_idxs;
   for (size_t i = 0; i < num_transformations && i < max_num_trials; ++i) {
-    const VotingBin& bin = bins[0].at(bin_scores[i].first);
+    const VotingBin& bin = *bin_scores[i].first;
     const TwoWayTransform tform(bin.GetMeanTransformation());
     ComputeInliers(tform,
                    matches,

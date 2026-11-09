@@ -114,6 +114,16 @@ TEST(FeatureGeometry, Orientation) {
   }
 }
 
+TEST(FeatureGeometry, AreaUnderAreaPreservingShear) {
+  FeatureGeometry f;
+  f.scale = 2;
+  Eigen::Matrix2f shear;
+  shear << 1, 4096, 0, 1;
+  EXPECT_FLOAT_EQ(f.GetAreaUnderTransform(shear), 2.0f);
+  shear(0, 0) = -2;
+  EXPECT_FLOAT_EQ(f.GetAreaUnderTransform(shear), 1.0f);
+}
+
 }  // namespace
 }  // namespace retrieval
 }  // namespace colmap
