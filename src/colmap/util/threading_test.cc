@@ -903,6 +903,41 @@ TEST(JobQueue, Wait) {
   consumer_thread.join();
 }
 
+TEST(JobQueue, WaitAfterStop) {
+  JobQueue<int> job_queue;
+  ASSERT_TRUE(job_queue.Push(1));
+  job_queue.Stop();
+
+  auto waiter = std::async(std::launch::async, [&]() { job_queue.Wait(); });
+  EXPECT_EQ(waiter.wait_for(std::chrono::seconds(1)),
+            std::future_status::ready);
+  EXPECT_EQ(job_queue.Size(), 1);
+  EXPECT_FALSE(job_queue.Pop().IsValid());
+  // Release the waiter even on a regression so the test can report its failure.
+  job_queue.Clear();
+  waiter.get();
+}
+
+TEST(JobQueue, StopWakesWaiters) {
+  JobQueue<int> job_queue;
+  ASSERT_TRUE(job_queue.Push(1));
+  std::promise<void> started;
+  auto waiter = std::async(std::launch::async, [&]() {
+    started.set_value();
+    job_queue.Wait();
+  });
+  started.get_future().wait();
+  EXPECT_EQ(waiter.wait_for(std::chrono::milliseconds(10)),
+            std::future_status::timeout);
+
+  job_queue.Stop();
+  EXPECT_EQ(waiter.wait_for(std::chrono::seconds(1)),
+            std::future_status::ready);
+  EXPECT_EQ(job_queue.Size(), 1);
+  job_queue.Clear();
+  waiter.get();
+}
+
 TEST(JobQueue, StopProducer) {
   JobQueue<int> job_queue(1);
 
