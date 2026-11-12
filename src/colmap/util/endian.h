@@ -6,6 +6,7 @@
 
 #include <algorithm>
 #include <iostream>
+#include <type_traits>
 #include <vector>
 
 namespace colmap {
@@ -99,6 +100,17 @@ T ReadBinaryLittleEndian(std::istream* stream) {
 
 template <typename T>
 void ReadBinaryLittleEndian(std::istream* stream, std::vector<T>* data) {
+  if (data->empty()) {
+    return;
+  }
+  // vector<bool> uses packed storage and has no contiguous data pointer.
+  if constexpr (!std::is_same_v<T, bool>) {
+    if (IsLittleEndian()) {
+      stream->read(reinterpret_cast<char*>(data->data()),
+                   sizeof(T) * data->size());
+      return;
+    }
+  }
   for (size_t i = 0; i < data->size(); ++i) {
     (*data)[i] = ReadBinaryLittleEndian<T>(stream);
   }
@@ -112,6 +124,14 @@ void WriteBinaryLittleEndian(std::ostream* stream, const T& data) {
 
 template <typename T>
 void WriteBinaryLittleEndian(std::ostream* stream, const span<const T>& data) {
+  if (data.empty()) {
+    return;
+  }
+  if (IsLittleEndian()) {
+    stream->write(reinterpret_cast<const char*>(data.begin()),
+                  sizeof(T) * data.size());
+    return;
+  }
   for (const auto& elem : data) {
     WriteBinaryLittleEndian<T>(stream, elem);
   }

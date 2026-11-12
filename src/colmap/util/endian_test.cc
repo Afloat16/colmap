@@ -180,5 +180,61 @@ TEST(ReadWriteBinaryLittleEndian, Nominal) {
   TestFloatReadWriteBinaryLittleEndian<double>();
 }
 
+TEST(ReadWriteBinaryLittleEndian, VectorMatchesScalarEncoding) {
+  const std::vector<uint32_t> values = {0, 1, 0x12345678, 0xffffffff};
+  std::stringstream scalar;
+  for (const uint32_t value : values) {
+    WriteBinaryLittleEndian<uint32_t>(&scalar, value);
+  }
+  std::stringstream vector;
+  WriteBinaryLittleEndian<uint32_t>(&vector, {values.data(), values.size()});
+  EXPECT_EQ(vector.str(), scalar.str());
+  EXPECT_EQ(vector.str(),
+            std::string("\x00\x00\x00\x00\x01\x00\x00\x00"
+                        "\x78\x56\x34\x12\xff\xff\xff\xff",
+                        16));
+  std::vector<uint32_t> decoded(values.size());
+  ReadBinaryLittleEndian<uint32_t>(&scalar, &decoded);
+  EXPECT_EQ(decoded, values);
+  EXPECT_TRUE(scalar.good());
+  EXPECT_EQ(scalar.peek(), std::char_traits<char>::eof());
+}
+
+TEST(ReadWriteBinaryLittleEndian, EmptyArraysPreserveStreamState) {
+  std::stringstream stream("abc");
+  char first;
+  stream.read(&first, 1);
+  const auto state = stream.rdstate();
+  const auto count = stream.gcount();
+  std::vector<float> values;
+  ReadBinaryLittleEndian<float>(&stream, &values);
+  WriteBinaryLittleEndian<float>(
+      &stream, span<const float>(values.data(), values.size()));
+  EXPECT_EQ(stream.rdstate(), state);
+  EXPECT_EQ(stream.gcount(), count);
+  EXPECT_EQ(stream.tellg(), 1);
+  EXPECT_EQ(stream.str(), "abc");
+}
+
+TEST(ReadWriteBinaryLittleEndian, PackedBooleanVector) {
+  std::stringstream stream;
+  const std::vector<bool> values = {true, false, false, true};
+  for (const bool value : values) {
+    WriteBinaryLittleEndian<bool>(&stream, value);
+  }
+  std::vector<bool> decoded(values.size());
+  ReadBinaryLittleEndian<bool>(&stream, &decoded);
+  EXPECT_EQ(decoded, values);
+}
+
+TEST(ReadWriteBinaryLittleEndian, TruncatedArraySetsFailure) {
+  std::stringstream stream(std::string("\x78\x56\x34\x12\xff", 5));
+  std::vector<uint32_t> decoded(3);
+  ReadBinaryLittleEndian<uint32_t>(&stream, &decoded);
+  EXPECT_EQ(decoded.front(), 0x12345678);
+  EXPECT_TRUE(stream.fail());
+  EXPECT_TRUE(stream.eof());
+}
+
 }  // namespace
 }  // namespace colmap
