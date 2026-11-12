@@ -212,13 +212,10 @@ void ThreadPool::Stop() {
       return;
     }
 
-    CheckFinishedTasks();
-
     stopped_ = true;
 
-    // Clear the queues.
+    // Discard tasks that have not started. Running tasks finish before joining.
     tasks_ = {};
-    finished_task_checkers_ = {};
   }
 
   task_condition_.notify_all();
@@ -228,6 +225,11 @@ void ThreadPool::Stop() {
   }
 
   finished_condition_.notify_all();
+
+  // Keep errors from both previously finished tasks and tasks that completed
+  // while joining. Shutdown must complete before any of these errors escape.
+  std::unique_lock<std::mutex> lock(mutex_);
+  CheckFinishedTasks();
 }
 
 void ThreadPool::Wait() {

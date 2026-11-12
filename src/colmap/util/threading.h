@@ -226,7 +226,8 @@ class ThreadPool {
   auto AddTask(func_t&& f, args_t&&... args)
       -> std::shared_future<result_of_t<func_t, args_t...>>;
 
-  // Stop the execution of all workers.
+  // Discard queued tasks and join all workers. Unhandled task exceptions are
+  // propagated as AggregateException after all workers have stopped.
   void Stop();
 
   // Wait until tasks are finished.

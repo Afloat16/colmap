@@ -676,6 +676,43 @@ TEST(ThreadPool, StopPropagatesException) {
   EXPECT_NO_THROW(pool.Stop());
 }
 
+TEST(ThreadPool, StopPropagatesExceptionFromRunningTask) {
+  ThreadPool pool(1);
+  std::promise<void> started;
+  std::promise<void> queued_ready;
+  auto ready = queued_ready.get_future();
+  std::shared_future<void> queued;
+  auto running = pool.AddTask([&] {
+    started.set_value();
+    ready.wait();
+    // Stop discards this queued task before joining the running worker.
+    // Its broken promise makes the failure happen during Stop, without sleeps.
+    queued.wait();
+    throw std::runtime_error("Failed during stop");
+  });
+  started.get_future().wait();
+  queued = pool.AddTask([] {});
+  queued_ready.set_value();
+
+  EXPECT_THROW(pool.Stop(), AggregateException);
+  EXPECT_THROW(queued.get(), std::future_error);
+  EXPECT_THROW(running.get(), std::runtime_error);
+  EXPECT_NO_THROW(pool.Wait());
+  EXPECT_NO_THROW(pool.Stop());
+}
+
+TEST(ThreadPool, StopCompletesBeforePropagatingFinishedTaskException) {
+  ThreadPool pool(1);
+  pool.AddTask([] { throw std::runtime_error("Failed before stop"); });
+  // A second task can only start after the first exception has been recorded.
+  pool.AddTask([] {}).wait();
+
+  EXPECT_THROW(pool.Stop(), AggregateException);
+  EXPECT_THROW(pool.AddTask([] {}), std::runtime_error);
+  EXPECT_NO_THROW(pool.Wait());
+  EXPECT_NO_THROW(pool.Stop());
+}
+
 TEST(ThreadPool, FutureAndWaitPropagatesException) {
   ThreadPool pool(1);
   auto future = pool.AddTask([]() { throw std::runtime_error("Error"); });
