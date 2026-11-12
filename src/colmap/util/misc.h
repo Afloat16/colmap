@@ -109,7 +109,12 @@ std::vector<T> CSVToVector(const std::string& csv) {
       if constexpr (std::is_same<T, std::string>::value) {
         values.push_back(std::move(elem));
       } else if constexpr (std::is_same<T, int>::value) {
-        values.push_back(std::stoi(elem));
+        size_t num_chars;
+        const int value = std::stoi(elem, &num_chars);
+        if (num_chars != elem.size()) {
+          throw std::invalid_argument("Trailing characters in integer");
+        }
+        values.push_back(value);
       } else if constexpr (std::is_same<T, float>::value) {
         values.push_back(static_cast<float>(StringToDouble(elem)));
       } else if constexpr (std::is_same<T, double>::value) {
@@ -117,6 +122,9 @@ std::vector<T> CSVToVector(const std::string& csv) {
       }
     } catch (const std::invalid_argument&) {
       LOG(ERROR) << "Failed to convert CSV element: " << elem;
+      return {};
+    } catch (const std::out_of_range&) {
+      LOG(ERROR) << "CSV element is out of range: " << elem;
       return {};
     }
   }

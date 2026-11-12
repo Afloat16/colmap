@@ -65,6 +65,22 @@ TEST(CSVToVector, IntInvalid) {
   EXPECT_EQ(list.size(), 0);
 }
 
+TEST(CSVToVector, IntRejectsPartialNumbers) {
+  EXPECT_THAT(CSVToVector<int>("0, 1gpu"), testing::IsEmpty());
+  EXPECT_THAT(CSVToVector<int>("0, 1.5"), testing::IsEmpty());
+  EXPECT_THAT(CSVToVector<int>("0, 1 2"), testing::IsEmpty());
+  EXPECT_THAT(CSVToVector<int>("0x10"), testing::IsEmpty());
+  EXPECT_THAT(CSVToVector<int>(" -1, +2; 003 "),
+              testing::ElementsAre(-1, 2, 3));
+}
+
+TEST(CSVToVector, IntRejectsOutOfRangeNumbers) {
+  EXPECT_THAT(CSVToVector<int>("0, 999999999999999999999999999999"),
+              testing::IsEmpty());
+  EXPECT_THAT(CSVToVector<int>("-999999999999999999999999999999, 1"),
+              testing::IsEmpty());
+}
+
 TEST(CSVToVector, Float) {
   const std::vector<float> list1 =
       CSVToVector<float>("1.5, 2.7, 3.14 , 4.0,5.9,6.2 ");
