@@ -10,8 +10,9 @@ SPRT::SPRT(const Options& options) { Update(options); }
 
 void SPRT::Update(const Options& options) {
   options_ = options;
-  delta_epsilon_ = options.delta / options.epsilon;
-  delta_1_epsilon_1_ = (1 - options.delta) / (1 - options.epsilon);
+  log_delta_epsilon_ = std::log(options.delta) - std::log(options.epsilon);
+  log_delta_1_epsilon_1_ =
+      std::log1p(-options.delta) - std::log1p(-options.epsilon);
   UpdateDecisionThreshold();
 }
 
@@ -21,17 +22,19 @@ bool SPRT::Evaluate(const std::vector<double>& residuals,
                     size_t* num_eval_samples) {
   *num_inliers = 0;
 
-  double likelihood_ratio = 1;
+  // Accumulate in log space so a long inlier prefix cannot underflow the
+  // likelihood ratio and prevent rejection of a later outlier suffix.
+  double log_likelihood_ratio = 0;
 
   for (size_t i = 0; i < residuals.size(); ++i) {
     if (std::abs(residuals[i]) <= max_residual) {
       *num_inliers += 1;
-      likelihood_ratio *= delta_epsilon_;
+      log_likelihood_ratio += log_delta_epsilon_;
     } else {
-      likelihood_ratio *= delta_1_epsilon_1_;
+      log_likelihood_ratio += log_delta_1_epsilon_1_;
     }
 
-    if (likelihood_ratio > decision_threshold_) {
+    if (log_likelihood_ratio > log_decision_threshold_) {
       *num_eval_samples = i + 1;
       return false;
     }
@@ -70,7 +73,7 @@ void SPRT::UpdateDecisionThreshold() {
     A = A1;
   }
 
-  decision_threshold_ = A;
+  log_decision_threshold_ = std::log(A);
 }
 
 }  // namespace colmap

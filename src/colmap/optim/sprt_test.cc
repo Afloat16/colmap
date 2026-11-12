@@ -67,6 +67,30 @@ TEST(SPRT, EvaluateMixedEarlyReject) {
   EXPECT_EQ(num_eval_samples, 5);
 }
 
+TEST(SPRT, EvaluateAfterLongInlierPrefix) {
+  SPRT::Options options;
+  options.delta = 0.05;
+  options.epsilon = 0.5;
+  SPRT sprt(options);
+
+  // The direct product of 400 inlier likelihood ratios underflows to zero.
+  // A short outlier suffix still supports the model, but a long one must
+  // eventually overcome the evidence from the prefix and reject it.
+  std::vector<double> residuals(400, 0.1);
+  residuals.insert(residuals.end(), 100, 10.0);
+  size_t num_inliers = 0;
+  size_t num_eval_samples = 0;
+  EXPECT_TRUE(sprt.Evaluate(residuals, 1.0, &num_inliers, &num_eval_samples));
+  EXPECT_EQ(num_inliers, 400);
+  EXPECT_EQ(num_eval_samples, residuals.size());
+
+  residuals.insert(residuals.end(), 4900, 10.0);
+  EXPECT_FALSE(sprt.Evaluate(residuals, 1.0, &num_inliers, &num_eval_samples));
+  EXPECT_EQ(num_inliers, 400);
+  EXPECT_GT(num_eval_samples, 500);
+  EXPECT_LT(num_eval_samples, residuals.size());
+}
+
 TEST(SPRT, EvaluateEmpty) {
   SPRT::Options options;
   SPRT sprt(options);

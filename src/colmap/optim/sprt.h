@@ -44,9 +44,9 @@ class SPRT {
   void UpdateDecisionThreshold();
 
   Options options_;
-  double delta_epsilon_;
-  double delta_1_epsilon_1_;
-  double decision_threshold_;
+  double log_delta_epsilon_;
+  double log_delta_1_epsilon_1_;
+  double log_decision_threshold_;
 };
 
 }  // namespace colmap
