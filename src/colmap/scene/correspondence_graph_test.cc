@@ -313,6 +313,31 @@ TEST(CorrespondenceGraph, Duplicate) {
   EXPECT_EQ(correspondence_graph.NumMatchesBetweenAllImages().at(pair_id), 4);
 }
 
+TEST(CorrespondenceGraph, RejectedImagePairPreservesCounts) {
+  CorrespondenceGraph graph;
+  graph.AddImage(0, 3);
+  graph.AddImage(1, 3);
+  TwoViewGeometry geometry;
+  geometry.inlier_matches = {{0, 0}, {1, 1}};
+  graph.AddTwoViewGeometry(0, 1, geometry);
+
+  // Re-adding the pair is rejected in either orientation. It must not change
+  // the statistics used to select initial image pairs or track observations.
+  EXPECT_THROW(graph.AddTwoViewGeometry(0, 1, geometry), std::invalid_argument);
+  EXPECT_THROW(graph.AddTwoViewGeometry(1, 0, geometry), std::invalid_argument);
+  EXPECT_EQ(graph.NumCorrespondencesForImage(0), 2);
+  EXPECT_EQ(graph.NumCorrespondencesForImage(1), 2);
+  EXPECT_EQ(graph.NumObservationsForImage(0), 2);
+  EXPECT_EQ(graph.NumObservationsForImage(1), 2);
+  EXPECT_EQ(graph.NumMatchesBetweenImages(0, 1), 2);
+  EXPECT_EQ(graph.NumImagePairs(), 1);
+
+  graph.Finalize();
+  FeatureMatches matches;
+  graph.ExtractMatchesBetweenImages(0, 1, matches);
+  EXPECT_EQ(matches, geometry.inlier_matches);
+}
+
 TEST(CorrespondenceGraph, UpdateTwoViewGeometry) {
   CorrespondenceGraph correspondence_graph;
   correspondence_graph.AddImage(0, 10);
