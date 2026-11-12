@@ -114,10 +114,12 @@ void CreateDirIfNotExists(const std::filesystem::path& path, bool recursive) {
   if (ExistsDir(path)) {
     return;
   }
+  // Another caller may create the directory after the existence check. A false
+  // return then means the directory already exists; filesystem errors throw.
   if (recursive) {
-    THROW_CHECK(std::filesystem::create_directories(path));
+    std::filesystem::create_directories(path);
   } else {
-    THROW_CHECK(std::filesystem::create_directory(path));
+    std::filesystem::create_directory(path);
   }
 }
 

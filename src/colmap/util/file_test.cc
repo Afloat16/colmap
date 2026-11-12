@@ -4,15 +4,80 @@
 
 #include "colmap/util/testing.h"
 
+#include <atomic>
+#include <condition_variable>
 #include <cstdlib>
 #include <cstring>
 #include <fstream>
+#include <mutex>
+#include <thread>
+#include <vector>
 
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
 
 namespace colmap {
 namespace {
+
+TEST(CreateDirIfNotExists, ConcurrentCreators) {
+  const auto dir = CreateTestDir();
+  for (const bool recursive : {false, true}) {
+    for (int round = 0; round < 20; ++round) {
+      auto path =
+          dir / (std::to_string(recursive) + "_" + std::to_string(round));
+      if (recursive) {
+        path /= "parent/child";
+      }
+      constexpr int kNumThreads = 16;
+      std::mutex mutex;
+      std::condition_variable ready_condition;
+      std::condition_variable start_condition;
+      int ready = 0;
+      bool start = false;
+      std::atomic<int> failures{0};
+      std::vector<std::thread> workers;
+      for (int i = 0; i < kNumThreads; ++i) {
+        workers.emplace_back([&] {
+          {
+            std::unique_lock<std::mutex> lock(mutex);
+            ++ready;
+            ready_condition.notify_one();
+            start_condition.wait(lock, [&] { return start; });
+          }
+          try {
+            CreateDirIfNotExists(path, recursive);
+          } catch (const std::exception&) {
+            ++failures;
+          }
+        });
+      }
+      {
+        std::unique_lock<std::mutex> lock(mutex);
+        ready_condition.wait(lock, [&] { return ready == kNumThreads; });
+        start = true;
+      }
+      start_condition.notify_all();
+      for (auto& worker : workers) {
+        worker.join();
+      }
+      EXPECT_EQ(failures, 0)
+          << "recursive=" << recursive << ", round=" << round;
+      EXPECT_TRUE(ExistsDir(path));
+    }
+  }
+}
+
+TEST(CreateDirIfNotExists, ExistingFilesRemainErrors) {
+  const auto dir = CreateTestDir();
+  const auto file = dir / "file";
+  std::ofstream(file).close();
+  EXPECT_THROW(CreateDirIfNotExists(file), std::filesystem::filesystem_error);
+  EXPECT_THROW(CreateDirIfNotExists(file, true),
+               std::filesystem::filesystem_error);
+  EXPECT_THROW(CreateDirIfNotExists(file / "child", true),
+               std::filesystem::filesystem_error);
+  EXPECT_TRUE(ExistsFile(file));
+}
 
 TEST(EnsureTrailingSlash, Nominal) {
   EXPECT_EQ(EnsureTrailingSlash(""), "/");
