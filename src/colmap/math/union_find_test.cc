@@ -243,6 +243,34 @@ TEST(UnionFind, FindIfExists) {
   EXPECT_TRUE(uf.FindIfExists(2).has_value());
 }
 
+TEST(UnionFind, FindIfExistsFollowsUncompressedParents) {
+  UnionFind<int> uf;
+  uf.Union(1, 2);
+  uf.Union(2, 3);
+  uf.Union(3, 4);
+  uf.Union(10, 20);
+  const auto parents = uf.Parents();
+  const auto& const_uf = uf;
+
+  for (const int element : {1, 2, 3, 4}) {
+    EXPECT_EQ(const_uf.FindIfExists(element), 4);
+  }
+  EXPECT_EQ(const_uf.FindIfExists(10), 20);
+  EXPECT_FALSE(const_uf.FindIfExists(99).has_value());
+  EXPECT_EQ(uf.Parents(), parents);
+}
+
+TEST(UnionFind, FindIfExistsAfterMergingSets) {
+  UnionFind<std::string> uf;
+  uf.Union("first", "second");
+  uf.Union("third", "fourth");
+  uf.Union("second", "third");
+
+  EXPECT_EQ(uf.FindIfExists("first"), "fourth");
+  EXPECT_EQ(uf.FindIfExists("third"), "fourth");
+  EXPECT_EQ(uf.Parents().size(), 4);
+}
+
 TEST(UnionFind, Parents) {
   UnionFind<int> uf;
   EXPECT_TRUE(uf.Parents().empty());

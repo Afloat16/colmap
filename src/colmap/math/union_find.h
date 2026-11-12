@@ -46,6 +46,9 @@ class UnionFind {
     if (it == parent_.end()) {
       return std::nullopt;
     }
+    while (it->second != it->first) {
+      it = parent_.find(it->second);
+    }
     return it->second;
   }
 
