@@ -22,6 +22,10 @@ class LRUCache {
 
   LRUCache(size_t max_num_elems, LoadFn load_fn);
 
+  // Copy cached values and recency order with independent cache bookkeeping.
+  LRUCache(const LRUCache& other);
+  LRUCache(LRUCache&&) = default;
+
   // The number of elements in the cache.
   size_t NumElems() const;
   size_t MaxNumElems() const;
@@ -117,6 +121,10 @@ class MemoryConstrainedLRUCache {
 
   MemoryConstrainedLRUCache(size_t max_num_bytes, LoadFn load_fn);
 
+  // Copy cached values and recency order with independent cache bookkeeping.
+  MemoryConstrainedLRUCache(const MemoryConstrainedLRUCache& other);
+  MemoryConstrainedLRUCache(MemoryConstrainedLRUCache&&) = default;
+
   // The size in bytes of the elements in the cache.
   size_t NumBytes() const;
   size_t MaxNumBytes() const;
@@ -168,6 +176,17 @@ LRUCache<key_t, value_t>::LRUCache(const size_t max_num_elems, LoadFn load_fn)
     : max_num_elems_(max_num_elems), load_fn_(std::move(load_fn)) {
   THROW_CHECK_NOTNULL(load_fn_);
   THROW_CHECK_GT(max_num_elems, 0);
+}
+
+template <typename key_t, typename value_t>
+LRUCache<key_t, value_t>::LRUCache(const LRUCache& other)
+    : max_num_elems_(other.max_num_elems_),
+      elems_list_(other.elems_list_),
+      load_fn_(other.load_fn_) {
+  elems_map_.reserve(other.elems_map_.size());
+  for (auto it = elems_list_.begin(); it != elems_list_.end(); ++it) {
+    elems_map_.emplace(it->first, it);
+  }
 }
 
 template <typename key_t, typename value_t>
@@ -330,6 +349,20 @@ MemoryConstrainedLRUCache<key_t, value_t>::MemoryConstrainedLRUCache(
       load_fn_(std::move(load_fn)) {
   THROW_CHECK_NOTNULL(load_fn_);
   THROW_CHECK_GT(max_num_bytes, 0);
+}
+
+template <typename key_t, typename value_t>
+MemoryConstrainedLRUCache<key_t, value_t>::MemoryConstrainedLRUCache(
+    const MemoryConstrainedLRUCache& other)
+    : max_num_bytes_(other.max_num_bytes_),
+      num_bytes_(other.num_bytes_),
+      elems_list_(other.elems_list_),
+      load_fn_(other.load_fn_) {
+  elems_map_.reserve(other.elems_map_.size());
+  for (auto it = elems_list_.begin(); it != elems_list_.end(); ++it) {
+    elems_map_.emplace(
+        it->first, std::make_pair(it, other.elems_map_.at(it->first).second));
+  }
 }
 
 template <typename key_t, typename value_t>

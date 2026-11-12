@@ -143,11 +143,50 @@ TEST(LRUCache, Clear) {
   EXPECT_TRUE(cache.Exists(0));
 }
 
+TEST(LRUCache, CopyKeepsIndependentRecencyAndEviction) {
+  LRUCache<int, int> original(
+      2, [](const int key) { return std::make_shared<int>(key); });
+  const auto value = original.Get(1);
+  original.Get(2);
+
+  auto copy = original;
+  EXPECT_EQ(copy.Get(1), value);
+  copy.Get(3);
+  EXPECT_FALSE(copy.Exists(2));
+  EXPECT_TRUE(original.Exists(2));
+  EXPECT_FALSE(original.Exists(3));
+
+  original.Clear();
+  EXPECT_EQ(*copy.Get(1), 1);
+  EXPECT_TRUE(copy.Evict(1));
+  EXPECT_EQ(copy.NumElems(), 1);
+}
+
 struct SizedElem {
   explicit SizedElem(const size_t num_bytes_) : num_bytes(num_bytes_) {}
   size_t NumBytes() const { return num_bytes; }
   size_t num_bytes;
 };
+
+TEST(MemoryConstrainedLRUCache, CopyKeepsIndependentRecencyAndAccounting) {
+  MemoryConstrainedLRUCache<int, SizedElem> original(
+      5, [](const int key) { return std::make_shared<SizedElem>(key); });
+  const auto value = original.Get(2);
+  original.Get(3);
+
+  auto copy = original;
+  EXPECT_EQ(copy.Get(2), value);
+  copy.Get(1);
+  EXPECT_FALSE(copy.Exists(3));
+  EXPECT_EQ(copy.NumBytes(), 3);
+  EXPECT_TRUE(original.Exists(3));
+  EXPECT_EQ(original.NumBytes(), 5);
+
+  original.Clear();
+  EXPECT_EQ(copy.Get(2)->NumBytes(), 2);
+  EXPECT_TRUE(copy.Evict(2));
+  EXPECT_EQ(copy.NumBytes(), 1);
+}
 
 TEST(MemoryConstrainedLRUCache, Empty) {
   MemoryConstrainedLRUCache<int, SizedElem> cache(
