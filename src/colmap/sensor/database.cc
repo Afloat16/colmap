@@ -31,17 +31,15 @@ bool CameraDatabase::QuerySensorWidth(const std::string& make,
     if (StringContains(cleaned_make, make_name) ||
         StringContains(make_name, cleaned_make)) {
       for (const auto& [model_name, sensor_width] : models) {
-        if (StringContains(cleaned_model, model_name) ||
-            StringContains(model_name, cleaned_model)) {
+        if (cleaned_model == model_name) {
+          // An exact match can follow several ambiguous substring matches.
           *sensor_width_mm = sensor_width;
-          if (cleaned_model == model_name) {
-            // Model exactly matches, return immediately.
-            return true;
-          }
+          return true;
+        }
+        if (spec_matches < 2 && (StringContains(cleaned_model, model_name) ||
+                                 StringContains(model_name, cleaned_model))) {
+          *sensor_width_mm = sensor_width;
           spec_matches += 1;
-          if (spec_matches > 1) {
-            break;
-          }
         }
       }
     }
