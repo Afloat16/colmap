@@ -177,6 +177,33 @@ def test_filter_database_by_covisibility(tmp_path: Path) -> None:
         assert not database.exists_two_view_geometry(1, 3)
 
 
+@pytest.mark.parametrize(
+    ("names", "counts", "message"),
+    [
+        (np.array(["a.png", "b.png"]), np.zeros((2, 1), dtype=int), "matrix"),
+        (np.array(["a.png", "a.png"]), np.zeros((2, 2), dtype=int), "unique"),
+        (np.array([["a.png"]]), np.zeros((1, 1), dtype=int), "1D string"),
+        (np.array([123]), np.zeros((1, 1), dtype=int), "1D string"),
+        (np.array(["a.png"]), np.array([[-1]]), "nonnegative integers"),
+        (np.array(["a.png"]), np.array([[np.nan]]), "nonnegative integers"),
+    ],
+)
+def test_covisibility_validation_precedes_database_access(
+    tmp_path: Path, names: np.ndarray, counts: np.ndarray, message: str
+) -> None:
+    database_path = tmp_path / "database.db"
+    covisibility_path = tmp_path / "covisibility.npz"
+    np.savez(
+        covisibility_path,
+        image_names=names,
+        directed_overlap_counts=counts,
+    )
+
+    with pytest.raises(ValueError, match=message):
+        filter_database_by_covisibility(database_path, covisibility_path, 1)
+    assert not database_path.exists()
+
+
 def test_run_perspective_raises_for_empty_input_dir(tmp_path: Path) -> None:
     input_dir = tmp_path / "panoramas"
     input_dir.mkdir()

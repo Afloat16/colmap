@@ -561,9 +561,22 @@ def filter_database_by_covisibility(
     split_image_name: Callable[[str], tuple[int, str]] | None = None,
 ) -> None:
     with np.load(covisibility_path) as covisibility:
-        image_names = covisibility["image_names"].tolist()
+        names = covisibility["image_names"]
         overlap_counts = covisibility["directed_overlap_counts"]
+    # Validate the complete input before opening the database: a mismatched
+    # matrix could otherwise fail after some verified pairs were deleted.
+    if names.ndim != 1 or names.dtype.kind != "U":
+        raise ValueError("Covisibility image_names must be a 1D string array.")
+    image_names = names.tolist()
+    if overlap_counts.shape != (len(image_names), len(image_names)):
+        raise ValueError("Covisibility count matrix must match image_names.")
+    if overlap_counts.dtype.kind not in ("i", "u") or (
+        overlap_counts.dtype.kind == "i" and np.any(overlap_counts < 0)
+    ):
+        raise ValueError("Covisibility counts must be nonnegative integers.")
     image_name_to_idx = {name: idx for idx, name in enumerate(image_names)}
+    if len(image_name_to_idx) != len(image_names):
+        raise ValueError("Covisibility image_names must be unique.")
 
     def pano_name(image_name: str) -> str:
         if split_image_name is None:
