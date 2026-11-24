@@ -565,7 +565,7 @@ def filter_database_by_covisibility(
         overlap_counts = covisibility["directed_overlap_counts"]
     # Validate the complete input before opening the database: a mismatched
     # matrix could otherwise fail after some verified pairs were deleted.
-    if names.ndim != 1 or names.dtype.kind != "U":
+    if names.ndim != 1 or (names.size and names.dtype.kind != "U"):
         raise ValueError("Covisibility image_names must be a 1D string array.")
     image_names = names.tolist()
     if overlap_counts.shape != (len(image_names), len(image_names)):

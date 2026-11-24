@@ -204,6 +204,19 @@ def test_covisibility_validation_precedes_database_access(
     assert not database_path.exists()
 
 
+def test_filter_database_by_covisibility_accepts_empty_scene(tmp_path: Path) -> None:
+    database_path = tmp_path / "database.db"
+    with pycolmap.Database.open(database_path):
+        pass
+    covisibility_path = tmp_path / "covisibility.npz"
+    np.savez(
+        covisibility_path,
+        image_names=np.asarray([]),
+        directed_overlap_counts=np.zeros((0, 0), dtype=np.uint32),
+    )
+    filter_database_by_covisibility(database_path, covisibility_path, 1)
+
+
 def test_run_perspective_raises_for_empty_input_dir(tmp_path: Path) -> None:
     input_dir = tmp_path / "panoramas"
     input_dir.mkdir()
